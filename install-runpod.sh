@@ -158,18 +158,24 @@ else
     apt-get remove -y -qq ffmpeg 2>/dev/null || true
 
     # Download static build with NVENC
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+    # Use FFmpeg 7.1 (not master) — master requires NVENC API 13.0 / driver 570+
+    # RunPod typically has driver 565 which supports NVENC API 12.2
+    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz"
     FFMPEG_TMP="/tmp/ffmpeg-build"
 
     mkdir -p "$FFMPEG_TMP"
-    print_status "Downloading FFmpeg static build..."
+    print_status "Downloading FFmpeg 7.1 static build..."
     wget -q "$FFMPEG_URL" -O "$FFMPEG_TMP/ffmpeg.tar.xz"
 
     print_status "Extracting FFmpeg..."
     cd "$FFMPEG_TMP"
     tar xf ffmpeg.tar.xz
-    cp ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/
-    cp ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/
+    FFMPEG_DIR=$(ls -d ffmpeg-n7.1-* 2>/dev/null | head -1)
+    if [ -z "$FFMPEG_DIR" ]; then
+        FFMPEG_DIR=$(ls -d ffmpeg-* 2>/dev/null | head -1)
+    fi
+    cp "$FFMPEG_DIR/bin/ffmpeg" /usr/local/bin/
+    cp "$FFMPEG_DIR/bin/ffprobe" /usr/local/bin/
     chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 
     # Cleanup
