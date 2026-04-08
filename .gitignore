@@ -1,0 +1,26 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Config
+.env
+
+# Node
+node_modules/
+
+# Windows
+start_workers.bat
+stop_workers.bat
+
+logs/
+*.log
+
+.locks/
+
+download/
+log/
