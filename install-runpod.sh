@@ -368,6 +368,7 @@ fi
 print_status "Setting up SCP scripts..."
 curl -fsSL "$URL_BASE/scripts/package.json" -o "$APP_DIR/scripts/package.json"
 curl -fsSL "$URL_BASE/scripts/scp-upload.js" -o "$APP_DIR/scripts/scp-upload.js"
+curl -fsSL "$URL_BASE/scripts/scp-upload-dir.js" -o "$APP_DIR/scripts/scp-upload-dir.js"
 curl -fsSL "$URL_BASE/scripts/scp-download.js" -o "$APP_DIR/scripts/scp-download.js"
 
 cd "$APP_DIR/scripts"

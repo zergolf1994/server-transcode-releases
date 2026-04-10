@@ -11,7 +11,8 @@ Worker service สำหรับ transcode วิดีโอเป็น HLS (
 - รองรับ GPU encoding (NVIDIA NVENC) พร้อม CPU fallback
 - สร้าง thumbnail sprite sheets + VTT
 - ดาวน์โหลดไฟล์ต้นฉบับจาก storage ผ่าน SCP
-- อัพโหลดผลลัพธ์กลับ storage ผ่าน SCP
+- อัพโหลดผลลัพธ์กลับ storage ผ่าน SCP (รองรับ directory upload)
+- Cloudflare cache purge อัตโนมัติหลัง transcode เสร็จ
 - รองรับหลาย workers พร้อมกัน (systemd template)
 - Auto-retry เมื่อ transcode ล้มเหลว
 - Per-job logging พร้อม auto cleanup
@@ -88,7 +89,8 @@ for i in $(seq 1 2); do sudo systemctl stop server-transcode@$i; done
     ├── package.json          # npm dependencies
     ├── node_modules/         # npm packages (node-scp)
     ├── scp-download.js       # SCP download script
-    └── scp-upload.js         # SCP upload script
+    ├── scp-upload.js         # SCP upload script
+    └── scp-upload-dir.js     # SCP directory upload (sprite/)
 ```
 
 ## 🔧 Environment Variables

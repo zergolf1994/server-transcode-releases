@@ -6,29 +6,30 @@ Video transcoding worker ที่รันบน RunPod GPU Pod — ใช้ N
 
 | Item | Requirement |
 |------|-------------|
-| **RunPod Template** | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` หรือ image ที่มี CUDA |
-| **GPU** | NVIDIA L4 (แนะนำ), A40, RTX A4000+ |
+| **RunPod Template** | Ubuntu-based image ที่มี CUDA (เช่น `runpod/ubuntu:22.04-cuda12.1`) |
+| **GPU** | NVIDIA RTX 4090, L4, A40, RTX A4000+ |
 | **Container Disk** | 50 GB |
 | **Volume Disk** | 0 GB (ไม่จำเป็น) |
 | **SSH** | ✅ เปิด |
 | **Jupyter** | ❌ ไม่ต้อง |
+| **Environment Variables** | `NVIDIA_DRIVER_CAPABILITIES=all` **(จำเป็น!)** |
 
 ## Quick Start
 
 ### 1. สร้าง RunPod GPU Pod
 
 1. ไปที่ [RunPod Console](https://www.runpod.io/console/pods) → **+ GPU Pod**
-2. เลือก GPU: **L4** (24 GB VRAM) — คุ้มที่สุด
-3. เลือก Template: **RunPod Pytorch 2.8.0**
-4. ตั้งค่า:
-   - ☐ Encrypt volume
+2. เลือก GPU: **RTX 4090** หรือ **L4** (24 GB VRAM)
+3. เลือก Template: Ubuntu-based ที่มี CUDA
+4. ⚠️ **กดปุ่ม Customize Deployment** → ใส่ Environment Variables:
+   ```
+   NVIDIA_DRIVER_CAPABILITIES = all
+   ```
+   > **สำคัญมาก!** ถ้าไม่ใส่ GPU จะ encode ไม่ได้ (NVENC blocked)
+5. ตั้งค่า:
    - ☑ **SSH terminal access**
-   - ☐ Start Jupyter notebook
-5. Storage:
    - Container Disk: **50 GB**
-   - Volume Disk: **0 GB**
-6. เลือก Pricing: **Interruptible** ($0.22/hr) หรือ **On-Demand** ($0.39/hr)
-7. กด **Deploy**
+6. กด **Deploy**
 
 ### 2. SSH เข้า Pod
 
@@ -149,6 +150,7 @@ RunPod GPU Pod
 │   ├── stop.sh                        # Stop workers
 │   ├── scripts/                       # SCP upload/download scripts
 │   │   ├── scp-upload.js
+│   │   ├── scp-upload-dir.js          # Directory upload (sprite/)
 │   │   ├── scp-download.js
 │   │   └── node_modules/
 │   ├── pids/                          # PID files
@@ -173,8 +175,32 @@ RunPod ไม่มี local storage → ใช้ **Remote Mode** (SCP upload/d
 2. SCP Download → ดาวน์โหลด file_original.mp4 จาก storage server
 3. FFmpeg NVENC → encode 360p, 480p, 720p, 1080p (GPU accelerated)
 4. SCP Upload → upload แต่ละ resolution กลับไป storage server
-5. Sprite → สร้าง thumbnail sprite sheet + VTT
-6. Cleanup → ลบ temp files
+5. Sprite → สร้าง thumbnail sprite sheet + VTT (upload ทั้ง folder ทีเดียว)
+6. Cloudflare Purge → ล้าง cache playlist.m3u8 (original + cloned files)
+7. Cleanup → ลบ temp files
+```
+
+## ☁️ Cloudflare Cache Purge
+
+หลัง transcode เสร็จ จะ purge cache `playlist.m3u8` อัตโนมัติ (ทั้ง original + cloned files)
+
+### Settings ที่ต้องเพิ่มใน MongoDB (collection: `settings`)
+
+| name | value | คำอธิบาย |
+|------|-------|----------|
+| `domain_content` | `cdn.vdohls.com` | Domain ของ content CDN (ไม่ต้องใส่ https://) |
+| `cf_zone_id` | `be3d1b73...` | Cloudflare Zone ID (หาได้ที่ Dashboard → Overview) |
+| `cf_api_token` | `cfut_ED4p...` | Cloudflare API Token (ต้องมี permission: Zone → Cache Purge → Purge) |
+
+> ถ้าไม่ได้ตั้ง settings → จะ skip purge เงียบๆ ไม่ error
+
+### URL ที่จะถูก purge
+
+```
+https://cdn.vdohls.com/{originalSlug}/playlist.m3u8
+https://cdn.vdohls.com/{clonedSlug1}/playlist.m3u8
+https://cdn.vdohls.com/{clonedSlug2}/playlist.m3u8
+...
 ```
 
 ## Disk Usage
@@ -229,10 +255,20 @@ ffmpeg -encoders 2>/dev/null | grep nvenc
 # เช็ค GPU
 nvidia-smi
 
-# ถ้าไม่เห็น h264_nvenc → ลง FFmpeg ใหม่
-./install-runpod.sh --mongodb-uri "..." 
-# installer จะ detect และลงใหม่
+# ทดสอบ NVENC จริงๆ
+ffmpeg -v error -f lavfi -i "color=c=black:s=256x256:d=1:r=25" \
+  -pix_fmt yuv420p -c:v h264_nvenc -frames:v 1 -f null -
 ```
+
+**ถ้าเจอ `OpenEncodeSessionEx failed: unsupported device`:**
+
+→ Pod ไม่ได้ตั้ง `NVIDIA_DRIVER_CAPABILITIES=all`
+
+1. ไปที่ RunPod Dashboard → Stop Pod
+2. Edit Pod → Environment Variables → เพิ่ม `NVIDIA_DRIVER_CAPABILITIES=all`
+3. Start Pod ใหม่
+
+> ⚠️ ต้อง set env var **ตอนสร้าง Pod** หรือ **ก่อน Start** — ใช้ `export` ใน shell ไม่ช่วย
 
 ### Disk เต็ม
 
