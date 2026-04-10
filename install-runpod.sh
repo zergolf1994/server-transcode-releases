@@ -223,19 +223,32 @@ print_status "System dependencies installed."
 # ==========================================
 # Install FFmpeg with NVENC (static build)
 # ==========================================
+NEED_FFMPEG=false
 if [ "$SKIP_FFMPEG" = true ]; then
     print_status "Skipping FFmpeg installation (--skip-ffmpeg)"
-elif command -v ffmpeg &>/dev/null && ffmpeg -encoders 2>/dev/null | grep -q h264_nvenc; then
-    print_status "FFmpeg with NVENC already installed ✓"
+elif [ -f "/usr/local/bin/ffmpeg" ] && /usr/local/bin/ffmpeg -encoders 2>/dev/null | grep -q h264_nvenc; then
+    # Our static build is already installed at /usr/local/bin
+    FFMPEG_VER=$(/usr/local/bin/ffmpeg -version 2>/dev/null | head -1 | grep -oP 'n\K[0-9]+\.[0-9]+' | head -1)
+    if [ "$(echo "$FFMPEG_VER" | cut -d. -f1)" -ge 7 ] 2>/dev/null; then
+        print_status "FFmpeg $FFMPEG_VER with NVENC already installed ✓"
+    else
+        print_warning "FFmpeg version too old ($FFMPEG_VER) — upgrading..."
+        NEED_FFMPEG=true
+    fi
 else
-    print_status "Installing FFmpeg with NVENC support..."
+    NEED_FFMPEG=true
+fi
 
-    # Remove system ffmpeg if exists (no NVENC)
-    apt-get remove -y -qq ffmpeg 2>/dev/null || true
+if [ "$NEED_FFMPEG" = true ]; then
+    print_status "Installing FFmpeg 7.1 with NVENC support..."
+
+    # Remove system ffmpeg (apt version — usually old, no NVENC)
+    if dpkg -l ffmpeg 2>/dev/null | grep -q "^ii"; then
+        print_status "Removing apt-installed FFmpeg (old version)..."
+        apt-get remove -y -qq ffmpeg 2>/dev/null || true
+    fi
 
     # Download static build with NVENC
-    # Use FFmpeg 7.1 (not master) — master requires NVENC API 13.0 / driver 570+
-    # RunPod typically has driver 565 which supports NVENC API 12.2
     FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz"
     FFMPEG_TMP="/tmp/ffmpeg-build"
 
@@ -254,12 +267,15 @@ else
     cp "$FFMPEG_DIR/bin/ffprobe" /usr/local/bin/
     chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 
+    # Make sure /usr/local/bin is first in PATH (override apt version)
+    hash -r
+
     # Cleanup
     rm -rf "$FFMPEG_TMP"
 
     # Verify
     if ffmpeg -encoders 2>/dev/null | grep -q h264_nvenc; then
-        print_status "FFmpeg with NVENC installed ✓"
+        print_status "FFmpeg 7.1 with NVENC installed ✓"
     else
         print_warning "FFmpeg installed but NVENC not detected. GPU encoding may fall back to CPU."
     fi
