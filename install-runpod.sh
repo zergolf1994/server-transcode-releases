@@ -30,6 +30,7 @@ STORAGE_PATH=""
 NODE_VERSION="22"
 SKIP_FFMPEG=false
 STOP_ONLY=false
+UNINSTALL=false
 
 APP_NAME="server-transcode"
 APP_DIR="/workspace/server-transcode"
@@ -56,6 +57,7 @@ show_help() {
     echo "  --node-version VER     Node.js version (default: 22)"
     echo "  --skip-ffmpeg          Skip FFmpeg installation (if already installed)"
     echo "  --stop                 Stop all running workers and exit"
+    echo "  --uninstall            Uninstall everything and clean up"
     echo "  -h, --help             Show this help message"
     echo ""
     echo "Examples:"
@@ -67,6 +69,9 @@ show_help() {
     echo ""
     echo "  # Stop all workers"
     echo "  ./install-runpod.sh --stop"
+    echo ""
+    echo "  # Uninstall everything"
+    echo "  ./install-runpod.sh --uninstall"
     exit 0
 }
 
@@ -80,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --node-version) NODE_VERSION="$2"; shift 2;;
         --skip-ffmpeg) SKIP_FFMPEG=true; shift;;
         --stop) STOP_ONLY=true; shift;;
+        --uninstall) UNINSTALL=true; shift;;
         -h|--help) show_help;;
         *) print_error "Unknown option: $1"; exit 1;;
     esac
@@ -109,8 +115,78 @@ stop_workers() {
     print_status "All workers stopped."
 }
 
+# ==========================================
+# Uninstall
+# ==========================================
+uninstall() {
+    echo ""
+    print_header "============================================"
+    print_header "  Server Transcode — Uninstaller"
+    print_header "============================================"
+    echo ""
+
+    # 1. Stop all workers
+    print_status "[1/5] Stopping all workers..."
+    stop_workers
+
+    # 2. Remove application directory
+    print_status "[2/5] Removing application directory..."
+    if [ -d "$APP_DIR" ]; then
+        rm -rf "$APP_DIR"
+        print_status "Removed $APP_DIR"
+    else
+        print_warning "$APP_DIR not found — skipping."
+    fi
+
+    # 3. Remove FFmpeg (only the static build we installed)
+    print_status "[3/5] Removing FFmpeg (static build)..."
+    if [ -f "/usr/local/bin/ffmpeg" ]; then
+        rm -f /usr/local/bin/ffmpeg
+        rm -f /usr/local/bin/ffprobe
+        print_status "Removed /usr/local/bin/ffmpeg and /usr/local/bin/ffprobe"
+    else
+        print_warning "FFmpeg not found at /usr/local/bin — skipping."
+    fi
+
+    # 4. Remove Node.js (installed via nodesource)
+    print_status "[4/5] Removing Node.js..."
+    if command -v node &>/dev/null; then
+        apt-get remove -y -qq nodejs 2>/dev/null || true
+        apt-get autoremove -y -qq 2>/dev/null || true
+        # Remove nodesource list
+        rm -f /etc/apt/sources.list.d/nodesource.list 2>/dev/null || true
+        rm -f /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
+        print_status "Node.js removed."
+    else
+        print_warning "Node.js not found — skipping."
+    fi
+
+    # 5. Clean up temp files
+    print_status "[5/5] Cleaning up..."
+    rm -rf /tmp/ffmpeg-build 2>/dev/null || true
+
+    echo ""
+    print_header "============================================"
+    print_header "  ✅ Uninstallation completed!"
+    print_header "============================================"
+    echo ""
+    echo "  Removed:"
+    echo "    • All worker processes"
+    echo "    • Application directory ($APP_DIR)"
+    echo "    • FFmpeg static build (/usr/local/bin/ffmpeg)"
+    echo "    • Node.js"
+    echo "    • Temporary files"
+    echo ""
+    print_header "============================================"
+}
+
 if [ "$STOP_ONLY" = true ]; then
     stop_workers
+    exit 0
+fi
+
+if [ "$UNINSTALL" = true ]; then
+    uninstall
     exit 0
 fi
 
@@ -192,13 +268,29 @@ fi
 print_status "FFmpeg: $(ffmpeg -version 2>/dev/null | head -1)"
 
 # ==========================================
-# Check GPU
+# Check GPU & NVENC
 # ==========================================
 print_status "Checking GPU..."
+NVENC_OK=false
 if command -v nvidia-smi &>/dev/null; then
     GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
     if [ -n "$GPU_INFO" ]; then
         print_status "GPU detected: $GPU_INFO"
+
+        # Test NVENC actually works (not just compiled in)
+        print_status "Testing NVENC encoding..."
+        if ffmpeg -v error -f lavfi -i "color=c=black:s=256x256:d=1:r=25" -pix_fmt yuv420p -c:v h264_nvenc -frames:v 1 -f null - 2>/dev/null; then
+            print_status "NVENC encoding works ✓"
+            NVENC_OK=true
+        else
+            print_warning "NVENC test FAILED — GPU encoding will fall back to CPU."
+            print_warning ""
+            print_warning "This is usually because NVIDIA_DRIVER_CAPABILITIES is not set."
+            print_warning "To fix: In RunPod Dashboard → Edit Pod → Environment Variables:"
+            print_warning "  NVIDIA_DRIVER_CAPABILITIES=all"
+            print_warning "Then restart the pod."
+            print_warning ""
+        fi
     else
         print_warning "nvidia-smi found but no GPU detected. Will use CPU fallback."
     fi
@@ -303,6 +395,7 @@ for i in $(seq 1 $WORKER_COUNT); do
 
     # Export env vars and start
     (
+        export NVIDIA_DRIVER_CAPABILITIES=all
         export WORKER_ID="$WORKER_ID"
         # Source .env
         set -a
@@ -370,6 +463,7 @@ for i in $(seq 1 $WORKER_COUNT); do
     WORKER_LOG="$LOG_DIR/worker-$i.log"
 
     (
+        export NVIDIA_DRIVER_CAPABILITIES=all
         export WORKER_ID="$WORKER_ID"
         set -a
         source "$APP_DIR/.env"
@@ -412,6 +506,68 @@ echo "Done."
 STOPEOF
 chmod +x "$APP_DIR/stop.sh"
 
+# Create uninstall script
+cat > "$APP_DIR/uninstall.sh" <<'UNINSTALLEOF'
+#!/bin/bash
+# Uninstall server-transcode completely
+APP_DIR="/workspace/server-transcode"
+PID_DIR="$APP_DIR/pids"
+
+echo "🗑️  Uninstalling Server Transcode..."
+echo ""
+
+# Stop workers
+echo "[1/5] Stopping all workers..."
+for pidfile in "$PID_DIR"/*.pid; do
+    [ -f "$pidfile" ] || continue
+    pid=$(cat "$pidfile")
+    name=$(basename "$pidfile" .pid)
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        echo "  Stopped $name (PID: $pid)"
+    fi
+    rm -f "$pidfile"
+done
+pkill -f "$APP_DIR/server-transcode" 2>/dev/null || true
+echo "  All workers stopped."
+
+# Remove FFmpeg
+echo "[2/5] Removing FFmpeg..."
+if [ -f "/usr/local/bin/ffmpeg" ]; then
+    rm -f /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+    echo "  Removed FFmpeg."
+else
+    echo "  FFmpeg not found — skipping."
+fi
+
+# Remove Node.js
+echo "[3/5] Removing Node.js..."
+if command -v node &>/dev/null; then
+    apt-get remove -y -qq nodejs 2>/dev/null || true
+    apt-get autoremove -y -qq 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/nodesource.list 2>/dev/null || true
+    rm -f /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
+    echo "  Node.js removed."
+else
+    echo "  Node.js not found — skipping."
+fi
+
+# Clean temp
+echo "[4/5] Cleaning temp files..."
+rm -rf /tmp/ffmpeg-build 2>/dev/null || true
+echo "  Done."
+
+# Remove app directory (do this last since we're running from it)
+echo "[5/5] Removing application directory..."
+cd /workspace
+rm -rf "$APP_DIR"
+echo "  Removed $APP_DIR"
+
+echo ""
+echo "✅ Uninstallation completed!"
+UNINSTALLEOF
+chmod +x "$APP_DIR/uninstall.sh"
+
 # ==========================================
 # Summary
 # ==========================================
@@ -427,6 +583,7 @@ echo ""
 echo "  Directory:  $APP_DIR"
 echo "  Workers:    $RUNNING / $WORKER_COUNT running"
 echo "  GPU:        ${GPU_INFO:-Not detected}"
+echo "  NVENC:      $([ "$NVENC_OK" = true ] && echo '✅ Working' || echo '❌ Not working (CPU fallback)')"
 echo "  FFmpeg:     $(ffmpeg -version 2>/dev/null | head -1 | cut -d' ' -f1-3)"
 echo "  Node.js:    $(node --version)"
 echo ""
@@ -436,6 +593,7 @@ echo "    View all logs:  tail -f $LOG_DIR/worker-*.log"
 echo "    Stop workers:   $APP_DIR/stop.sh"
 echo "    Start workers:  $APP_DIR/start.sh"
 echo "    Restart:        $APP_DIR/stop.sh && $APP_DIR/start.sh"
+echo "    Uninstall:      $APP_DIR/uninstall.sh"
 echo ""
 echo "  Pod restart:"
 echo "    Workers auto-start → set RunPod start command to:"
